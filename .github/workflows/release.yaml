@@ -55,6 +55,7 @@ jobs:
       - generate-image-tag
       - build-and-push-image
     runs-on: ubuntu-latest
+    permissions: write-all
     steps:
       - name: Checkout
         uses: actions/checkout@v4
