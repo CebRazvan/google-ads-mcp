@@ -1,8 +1,14 @@
 services:
   google-ads-mcp:
     build: .
-    ports:
-      - "8080:8000"
+    expose:
+      - "8000"
     env_file:
       - .env
     restart: unless-stopped
+    networks:
+      - dokploy-network
+
+networks:
+  dokploy-network:
+    external: true
