@@ -124,4 +124,28 @@ class GoogleAdsSettings(BaseSettings):
     login_customer_id: str | None = None
 
 
+class OAuthProxySettings(BaseSettings):
+    """Settings for the built-in Google OAuth proxy (variant B).
+
+    When enabled, the MCP server acts as its own OAuth 2.1 Authorization
+    Server (with Dynamic Client Registration) for MCP clients, while
+    proxying the upstream OAuth exchange to Google using the same Google
+    Ads credentials defined in GoogleAdsSettings.
+    """
+
+    model_config = create_settings_config(("oauth", "proxy"))
+
+    enabled: bool = False
+    callback_path: str = "/oauth/google/callback"
+    upstream_scopes: list[str] = Field(
+        default_factory=lambda: [
+            "openid",
+            "email",
+            "https://www.googleapis.com/auth/adwords",
+        ]
+    )
+    auth_code_ttl_seconds: int = 300
+    pending_ttl_seconds: int = 600
+
+
 google_ads_settings = GoogleAdsSettings()  # type: ignore[call-arg]
