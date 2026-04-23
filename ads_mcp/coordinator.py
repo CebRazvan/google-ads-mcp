@@ -25,9 +25,11 @@ import logging
 from typing import Literal
 
 import json as _json
+from urllib.parse import urlparse as _urlparse
 
 import httpx
 from mcp.server.auth import routes as _mcp_auth_routes
+from mcp.server.auth.handlers import metadata as _mcp_metadata
 from mcp.server.auth.middleware import bearer_auth as _mcp_bearer_auth
 from mcp.server.auth.provider import AuthorizeError
 from mcp.server.auth.settings import (
@@ -38,6 +40,25 @@ from mcp.server.auth.settings import (
 from mcp.server.fastmcp import FastMCP
 from starlette.requests import Request
 from starlette.responses import JSONResponse, RedirectResponse, Response
+
+
+def _strip_bare_trailing_slash(url: str) -> str:
+    """Drop the trailing slash pydantic AnyHttpUrl adds to bare origins.
+
+    RFC 8414 §3 requires that `issuer` equal the base used to build the
+    `/.well-known/oauth-authorization-server` URL. That base is the bare
+    origin with no trailing slash (e.g. `https://example.com`), but
+    pydantic's AnyHttpUrl normalizes `https://example.com` to
+    `https://example.com/` during validation, which strict validators
+    (Anthropic's Claude backend) reject and silently fail the OAuth
+    `start-auth` step.
+    """
+    if not isinstance(url, str) or not url.endswith("/"):
+        return url
+    parsed = _urlparse(url)
+    if parsed.path in ("", "/") and not parsed.query and not parsed.fragment:
+        return f"{parsed.scheme}://{parsed.netloc}"
+    return url
 
 
 # MCP SDK 1.27.0 advertises only confidential client auth methods in the
@@ -127,6 +148,48 @@ async def _send_auth_error_claude_compat(  # type: ignore[no-untyped-def]
 
 _mcp_bearer_auth.RequireAuthMiddleware._send_auth_error = (
     _send_auth_error_claude_compat
+)
+
+
+# Normalize bare-origin URLs in AS and RS metadata responses (drop the
+# trailing slash pydantic AnyHttpUrl injects into `issuer` and
+# `authorization_servers[*]`). Without this, Anthropic's start-auth step
+# silently aborts because the returned issuer does not byte-match the
+# prefix the client used to fetch /.well-known/oauth-authorization-server.
+async def _metadata_handle_normalized(  # type: ignore[no-untyped-def]
+    self, request: Request
+) -> Response:
+    data = self.metadata.model_dump(
+        mode="json", by_alias=True, exclude_none=True
+    )
+    if "issuer" in data:
+        data["issuer"] = _strip_bare_trailing_slash(data["issuer"])
+    return JSONResponse(
+        content=data,
+        headers={"Cache-Control": "public, max-age=3600"},
+    )
+
+
+async def _prm_handle_normalized(  # type: ignore[no-untyped-def]
+    self, request: Request
+) -> Response:
+    data = self.metadata.model_dump(
+        mode="json", by_alias=True, exclude_none=True
+    )
+    servers = data.get("authorization_servers")
+    if isinstance(servers, list):
+        data["authorization_servers"] = [
+            _strip_bare_trailing_slash(s) for s in servers
+        ]
+    return JSONResponse(
+        content=data,
+        headers={"Cache-Control": "public, max-age=3600"},
+    )
+
+
+_mcp_metadata.MetadataHandler.handle = _metadata_handle_normalized
+_mcp_metadata.ProtectedResourceMetadataHandler.handle = (
+    _prm_handle_normalized
 )
 
 from ads_mcp.auth import BearerAuth, TokenVerifier
