@@ -62,90 +62,71 @@ def _build_metadata_with_public_client_support(*args, **kwargs):  # type: ignore
 _mcp_auth_routes.build_metadata = _build_metadata_with_public_client_support
 
 
-# MCP SDK 1.27.0 unconditionally emits `error="invalid_token"` in the
-# WWW-Authenticate header even when the request carried no Authorization
-# header at all. RFC 6750 §3 says the server SHOULD NOT include an error
-# code when the request lacks any authentication information. Claude Web's
-# bootstrap parser keys on this and classifies the connector as
-# `authStatus=token_invalid, authErrorType=unparseable`, aborting the
-# OAuth flow before DCR. Rewrite the challenge so that a request with
-# *no* Authorization header gets the minimal RFC-compliant form
-# `Bearer resource_metadata="…"`, while requests that actually presented
-# a (bad) bearer token still get the verbose RFC 6750 error form.
-async def _send_auth_error_rfc_compliant(  # type: ignore[no-untyped-def]
+# The default 401 shape emitted by MCP SDK 1.27.0 is parseable by the
+# reference MCP Python client, but Claude Web's connector bootstrap
+# reports `authStatus=token_invalid, authErrorType=unparseable` and
+# aborts the OAuth flow before DCR. Empirically, every known-working
+# remote OAuth MCP server (Asana, Linear, Notion, Intercom) returns the
+# same exact template, which Claude's parser clearly keys on:
+#
+#   Status: 401
+#   Content-Type: application/json
+#   WWW-Authenticate:
+#       Bearer realm="OAuth",
+#              resource_metadata="https://…/.well-known/oauth-protected-resource…",
+#              error="invalid_token",
+#              error_description="Missing or invalid access token"
+#   Body: {"error":"invalid_token","error_description":"Missing or invalid access token"}
+#
+# Notable versus the SDK default: `realm="OAuth"` is present; parameter
+# order is realm → resource_metadata → error → error_description; the
+# description is literally "Missing or invalid access token"; body is
+# always non-empty. Match that template exactly.
+_CLAUDE_COMPAT_DESCRIPTION = "Missing or invalid access token"
+
+
+async def _send_auth_error_claude_compat(  # type: ignore[no-untyped-def]
     self, send, status_code, error, description
 ):
-    request_had_auth_header = False
-    try:
-        receive_scope = getattr(self, "_last_scope", None)
-        if receive_scope is not None:
-            for name, _value in receive_scope.get("headers", []):
-                if name.lower() == b"authorization":
-                    request_had_auth_header = True
-                    break
-    except Exception:
-        request_had_auth_header = False
+    # For 403 (insufficient_scope) keep whatever the SDK gave us — that
+    # only happens post-authentication, so Claude's bootstrap parser
+    # never sees it in the failing path.
+    effective_error = error
+    effective_description = description
+    if status_code == 401:
+        effective_error = "invalid_token"
+        effective_description = _CLAUDE_COMPAT_DESCRIPTION
 
-    www_auth_parts: list[str] = []
-    if request_had_auth_header or status_code != 401:
-        www_auth_parts.append(f'error="{error}"')
-        www_auth_parts.append(f'error_description="{description}"')
+    www_auth_parts: list[str] = ['realm="OAuth"']
     if self.resource_metadata_url:
         www_auth_parts.append(
             f'resource_metadata="{self.resource_metadata_url}"'
         )
-    www_authenticate = "Bearer" + (
-        " " + ", ".join(www_auth_parts) if www_auth_parts else ""
-    )
+    www_auth_parts.append(f'error="{effective_error}"')
+    www_auth_parts.append(f'error_description="{effective_description}"')
+    www_authenticate = "Bearer " + ", ".join(www_auth_parts)
 
-    # Keep a body only when there's actually something to report beyond
-    # "not authenticated"; Claude Web is more forgiving with an empty body.
-    if request_had_auth_header or status_code != 401:
-        body_bytes = _json.dumps(
-            {"error": error, "error_description": description}
-        ).encode()
-        headers = [
-            (b"content-type", b"application/json"),
-            (b"content-length", str(len(body_bytes)).encode()),
-            (b"www-authenticate", www_authenticate.encode()),
-        ]
-    else:
-        body_bytes = b""
-        headers = [
-            (b"content-length", b"0"),
-            (b"www-authenticate", www_authenticate.encode()),
-        ]
+    body_bytes = _json.dumps(
+        {"error": effective_error, "error_description": effective_description},
+        separators=(",", ":"),
+    ).encode()
 
     await send(
         {
             "type": "http.response.start",
             "status": status_code,
-            "headers": headers,
+            "headers": [
+                (b"content-type", b"application/json"),
+                (b"content-length", str(len(body_bytes)).encode()),
+                (b"www-authenticate", www_authenticate.encode()),
+            ],
         }
     )
     await send({"type": "http.response.body", "body": body_bytes})
 
 
-_original_require_auth_call = _mcp_bearer_auth.RequireAuthMiddleware.__call__
-
-
-async def _require_auth_call_with_scope_capture(  # type: ignore[no-untyped-def]
-    self, scope, receive, send
-):
-    # Stash the incoming ASGI scope on the instance so _send_auth_error
-    # (monkey-patched above) can inspect the original request headers.
-    self._last_scope = scope
-    try:
-        await _original_require_auth_call(self, scope, receive, send)
-    finally:
-        self._last_scope = None
-
-
 _mcp_bearer_auth.RequireAuthMiddleware._send_auth_error = (
-    _send_auth_error_rfc_compliant
-)
-_mcp_bearer_auth.RequireAuthMiddleware.__call__ = (
-    _require_auth_call_with_scope_capture
+    _send_auth_error_claude_compat
 )
 
 from ads_mcp.auth import BearerAuth, TokenVerifier
