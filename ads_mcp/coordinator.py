@@ -25,6 +25,7 @@ import logging
 from typing import Literal
 
 import httpx
+from mcp.server.auth import routes as _mcp_auth_routes
 from mcp.server.auth.provider import AuthorizeError
 from mcp.server.auth.settings import (
     AuthSettings,
@@ -34,6 +35,28 @@ from mcp.server.auth.settings import (
 from mcp.server.fastmcp import FastMCP
 from starlette.requests import Request
 from starlette.responses import JSONResponse, RedirectResponse, Response
+
+
+# MCP SDK 1.27.0 advertises only confidential client auth methods in the
+# Authorization Server metadata, even though the register handler and the
+# MCP spec both support public PKCE clients (token_endpoint_auth_method=
+# "none"). Some MCP clients (Claude Web) read this metadata strictly and
+# abort OAuth setup before attempting DCR. Patch the metadata builder to
+# advertise "none" in addition to the confidential methods.
+_original_build_metadata = _mcp_auth_routes.build_metadata
+
+
+def _build_metadata_with_public_client_support(*args, **kwargs):  # type: ignore[no-untyped-def]
+    metadata = _original_build_metadata(*args, **kwargs)
+    metadata.token_endpoint_auth_methods_supported = [
+        "client_secret_post",
+        "client_secret_basic",
+        "none",
+    ]
+    return metadata
+
+
+_mcp_auth_routes.build_metadata = _build_metadata_with_public_client_support
 
 from ads_mcp.auth import BearerAuth, TokenVerifier
 from ads_mcp.jwt import JWTProvider
