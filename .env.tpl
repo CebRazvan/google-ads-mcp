@@ -11,7 +11,13 @@ SERVER_TRANSPORT="streamable-http"
 OAUTH_PROXY_ENABLED="true"
 FASTMCP_AUTH__ISSUER_URL="https://gads.lucramresponsabil.com"
 FASTMCP_AUTH__RESOURCE_SERVER_URL="https://gads.lucramresponsabil.com/mcp"
-FASTMCP_AUTH__REQUIRED_SCOPES='["https://www.googleapis.com/auth/adwords"]'
+# MCP-facing scope name. Keep this opaque — do NOT advertise the raw
+# Google scope URL here, or Claude Web misclassifies the server as a
+# pre-built Google connector and OAuth fails with step=start_error.
+# The upstream Google scope that this server actually requests from
+# Google is set via OAUTH_PROXY_UPSTREAM_SCOPES (default includes
+# https://www.googleapis.com/auth/adwords) and never leaves the server.
+FASTMCP_AUTH__REQUIRED_SCOPES='["google-ads-mcp"]'
 
 # --- Google Ads / upstream OAuth client ---
 # These are the SAME credentials used both for (a) proxying OAuth to Google

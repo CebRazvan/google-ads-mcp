@@ -165,13 +165,21 @@ def _create_mcp_server() -> tuple[FastMCP, GoogleOAuthProxy | None]:
         if proxy_settings.enabled:
             # Variant B: this server IS the OAuth AS for MCP clients
             # and proxies upstream to Google.
+            # MCP-facing scopes are kept intentionally opaque and separate
+            # from the Google scopes this server uses to call the Google Ads
+            # API. Advertising the raw Google scope (e.g. the Google Ads
+            # scope URL) in MCP metadata caused Claude Web to classify the
+            # server as a pre-built Google connector and abort the OAuth
+            # flow at "start_error" before ever hitting /register or
+            # /authorize. Upstream scopes still flow through
+            # GoogleOAuthProxy._upstream_scopes.
             settings.auth = AuthSettings(
                 issuer_url=settings.auth.issuer_url,
                 resource_server_url=settings.auth.resource_server_url,
                 required_scopes=settings.auth.required_scopes,
                 client_registration_options=ClientRegistrationOptions(
                     enabled=True,
-                    valid_scopes=proxy_settings.upstream_scopes,
+                    valid_scopes=settings.auth.required_scopes,
                     default_scopes=settings.auth.required_scopes,
                 ),
                 revocation_options=RevocationOptions(enabled=True),
