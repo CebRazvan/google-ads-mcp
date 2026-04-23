@@ -77,6 +77,11 @@ def _build_metadata_with_public_client_support(*args, **kwargs):  # type: ignore
         "client_secret_basic",
         "none",
     ]
+    # Match Asana/Linear/Notion: advertise the standard response mode
+    # explicitly. Optional per RFC 8414 but all known-working servers
+    # publish it, so err on the side of parity.
+    if getattr(metadata, "response_modes_supported", None) is None:
+        metadata.response_modes_supported = ["query"]
     return metadata
 
 
@@ -166,7 +171,11 @@ async def _metadata_handle_normalized(  # type: ignore[no-untyped-def]
         data["issuer"] = _strip_bare_trailing_slash(data["issuer"])
     return JSONResponse(
         content=data,
-        headers={"Cache-Control": "public, max-age=3600"},
+        # Force Anthropic to refetch every start-auth attempt. The SDK
+        # default caches for 1 hour, which means any server-side metadata
+        # fix is invisible to Claude until the hour rolls over — painful
+        # during debugging of the OAuth handshake.
+        headers={"Cache-Control": "no-store"},
     )
 
 
@@ -183,7 +192,11 @@ async def _prm_handle_normalized(  # type: ignore[no-untyped-def]
         ]
     return JSONResponse(
         content=data,
-        headers={"Cache-Control": "public, max-age=3600"},
+        # Force Anthropic to refetch every start-auth attempt. The SDK
+        # default caches for 1 hour, which means any server-side metadata
+        # fix is invisible to Claude until the hour rolls over — painful
+        # during debugging of the OAuth handshake.
+        headers={"Cache-Control": "no-store"},
     )
 
 
