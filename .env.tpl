@@ -10,7 +10,14 @@ SERVER_TRANSPORT="streamable-http"
 # server's own public URL.
 OAUTH_PROXY_ENABLED="true"
 FASTMCP_AUTH__ISSUER_URL="https://gads.lucramresponsabil.com"
-FASTMCP_AUTH__RESOURCE_SERVER_URL="https://gads.lucramresponsabil.com/mcp"
+FASTMCP_AUTH__RESOURCE_SERVER_URL="https://gads.lucramresponsabil.com/mcp/v1"
+# MCP transport path. Claude Web/Desktop dedupe connectors by (org_id,
+# URL) pair and reuse the same internal UUID even after Remove+Add. If
+# Claude ever caches a failed authStatus for a given URL, only a brand-
+# new URL triggers a fresh probe — so we publish on /mcp/v1 (matches the
+# convention used by first-party Google Workspace MCP servers) instead
+# of plain /mcp.
+FASTMCP_STREAMABLE_HTTP_PATH="/mcp/v1"
 # MCP-facing scope name. Keep this opaque — do NOT advertise the raw
 # Google scope URL here, or Claude Web misclassifies the server as a
 # pre-built Google connector and OAuth fails with step=start_error.
